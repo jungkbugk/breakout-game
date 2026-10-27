@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>돌파 매매 시뮬레이터</title>
+<style>
+:root{color-scheme:dark;--bg:#0f1318;--card:#181e26;--line:#2a323d;--tx:#e8edf3;--sub:#8f9bab;--acc:#4da3ff;--good:#3ecf8e;--bad:#ff6b6b;--warn:#f5b84a}
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f2f4f7;--card:#fff;--line:#d9dee5;--tx:#16202b;--sub:#5d6978;--acc:#1b6fd1;--good:#12915b;--bad:#d03b3b;--warn:#b57a0a;color-scheme:light}}
+:root[data-theme=light]{--bg:#f2f4f7;--card:#fff;--line:#d9dee5;--tx:#16202b;--sub:#5d6978;--acc:#1b6fd1;--good:#12915b;--bad:#d03b3b;--warn:#b57a0a;color-scheme:light}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif}
+.wrap{max-width:560px;margin:0 auto;padding-block:12px 24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{font-size:18px;margin:4px 0 2px}
+.sub{color:var(--sub);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin:10px 0}
+.row{display:flex;gap:8px;align-items:center}
+.row.sp{justify-content:space-between}
+button{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer}
+button:active{transform:scale(.98)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+button.up{background:var(--good);border-color:var(--good);color:#06150e;font-weight:700}
+button.dn{background:var(--bad);border-color:var(--bad);color:#1a0707;font-weight:700}
+button.on{outline:2px solid var(--acc)}
+.grow{flex:1}
+.seg{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.seg button{padding:8px 12px;font-size:14px}
+#pick2{position:sticky;bottom:10px;box-shadow:0 4px 18px #0008}
+canvas{width:100%;display:block;border-radius:8px;background:var(--bg)}
+.tag{display:inline-block;font-size:12px;color:var(--sub);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+.res{margin-top:10px;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+.big{font-size:20px;font-weight:700}
+.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.opt{position:relative;cursor:pointer}
+.opt.sel{outline:2px solid var(--acc)}
+.opt .n{position:absolute;left:10px;top:8px;font-weight:700;z-index:1;color:var(--sub)}
+.hide{display:none!important}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:5px 4px;text-align:right;border-bottom:1px solid var(--line)}
+td:first-child,th:first-child{text-align:left}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row sp"><h1>📈 돌파 매매 시뮬레이터</h1><button id="statBtn" style="padding:6px 10px;font-size:13px">기록</button></div>
+  <div class="sub">종목·시기를 가린 차트로 돌파 감각을 훈련합니다.</div>
+
+  <div id="menu">
+    <div class="card">
+      <b>게임 방식</b>
+      <div class="seg" id="modeSeg">
+        <button data-m="1" class="on">① 성공 / 실패</button>
+        <button data-m="2">② 베스트 고르기</button>
+        <button data-m="3">③ 매매 연습</button>
+      </div>
+      <div class="sub" id="modeDesc"></div>
+      <b style="display:block;margin-top:12px">시장</b>
+      <div class="seg" id="mkSeg">
+        <button data-k="ALL" class="on">전체</button><button data-k="KR">국장</button><button data-k="US">미장</button>
+      </div>
+      <b style="display:block;margin-top:12px">기간</b>
+      <div class="seg" id="perSeg">
+        <button data-p="ALL" class="on">전체</button><button data-p="pre">2020 이전</button><button data-p="post">2020 이후</button>
+      </div>
+      <div id="ratioBox">
+        <b style="display:block;margin-top:12px">출제 비율</b>
+        <div class="seg" id="ratioSeg">
+          <button data-r="nat" class="on">실전 비율</button><button data-r="bal">성공·실패 반반</button>
+        </div>
+      </div>
+      <div class="sub" id="baseInfo" style="margin-top:8px"></div>
+      <b style="display:block;margin-top:12px">라운드 수</b>
+      <div class="seg" id="nSeg">
+        <button data-n="5">5</button><button data-n="10" class="on">10</button><button data-n="20">20</button>
+      </div>
+      <button class="pri" id="startBtn" style="width:100%;margin-top:12px">시작</button>
+    </div>
+    <div class="card sub" style="line-height:1.6">
+      <b style="color:var(--tx)">판정 규칙</b><br>
+      돌파일(마지막 봉) 종가에 매수 → 손절 -8%(장중 저가 기준) → 최대 20거래일 보유 후 청산.<br>
+      수익률이 <b>+3% 초과</b>면 성공, 아니면 실패. 차트의 세로축은 돌파일 종가 대비 %입니다.<br>
+      ③ 매매 연습은 매수/패스를 고른 뒤 하루씩 열면서 직접 매도합니다. 손절 -8%는 자동, 손익을 R(1R=8%)로 채점합니다.<br>
+      <span class="warn">주의</span> 현재 상장 종목만 쓰므로 상장폐지 종목이 빠져 성공률이 실제보다 높게 나옵니다(생존 편향). 수수료·세금도 없습니다.<br>
+      국장은 빨강=상승/파랑=하락, 미장은 초록=상승/빨강=하락. 하단 얇은 선은 같은 시기의 지수입니다.
+    </div>
+  </div>
+
+  <div id="game" class="hide">
+    <div class="row sp sub"><span id="prog"></span><span>점수 <b id="score" style="color:var(--tx)">0</b> · 연속 <b id="streak" style="color:var(--tx)">0</b></span></div>
+    <div id="q1">
+      <div class="card">
+        <div class="row sp"><span class="tag" id="mkTag"></span><span class="sub" id="q1hint">돌파일 종가 매수 시 20일 후 +3% 초과?</span></div>
+        <canvas id="c1"></canvas>
+        <canvas id="i1" style="margin-top:6px"></canvas>
+        <div class="sub" id="idxLegend" style="margin-top:4px"></div>
+      </div>
+      <div class="row" id="ans1">
+        <button class="up grow" data-a="1">성공 ▲</button>
+        <button class="dn grow" data-a="0">실패 ▼</button>
+      </div>
+      <div id="ans3" class="hide">
+        <div class="sub" id="tInfo" style="margin:0 2px 8px"></div>
+        <div class="row" id="tBtns"></div>
+      </div>
+    </div>
+    <div id="q2" class="hide">
+      <div class="sub" style="margin:0 2px 6px">4개 돌파 중 20일 수익률이 가장 높을 차트를 고르세요. (같은 규칙·손절 -8%)</div>
+      <div id="opts"></div>
+      <button class="pri" id="pick2" style="width:100%" disabled>선택 확정</button>
+    </div>
+    <div id="result" class="res hide"></div>
+    <button class="pri hide" id="nextBtn" style="width:100%;margin-top:10px">다음</button>
+  </div>
+
+  <div id="end" class="hide">
+    <div class="card" style="text-align:center">
+      <div class="sub">결과</div><div class="big" id="endScore"></div><div class="sub" id="endDetail"></div>
+      <button class="pri" id="againBtn" style="width:100%;margin-top:12px">메뉴로</button>
+    </div>
+  </div>
+
+  <div id="stats" class="hide">
+    <div class="card"><b>누적 기록</b><div id="statBody"></div>
+      <div class="row" style="margin-top:10px"><button id="statClose" class="grow">닫기</button><button id="statReset">초기화</button></div></div>
+  </div>
+</div>
+
+<script>
+const DATA=__DATA__;
+const Q=DATA.q,PRE=DATA.pre,HOLD=DATA.hold,POST=DATA.post,PAT=DATA.patterns,BASE=DATA.base;
+const $=s=>document.querySelector(s);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let st=store.get('bo_stats',{});
+st.g1=st.g1||{n:0,ok:0};st.g2=st.g2||{n:0,best:0,second:0};st.pat=st.pat||{};st.g3=st.g3||{n:0,buy:0,win:0,sumR:0,pass:0,avoid:0,miss:0,ruleR:0,ruleN:0};
+let mode=1,mk='ALL',per='ALL',ratio='nat',total=10;
+let tBuys=0,tSumR=0,tWins=0,tPass=0;
+let round=0,score=0,streak=0,right=0,cur=null,used=new Set(),timer=null,locked=false;
+
+function seg(id,attr,cb){document.querySelectorAll(id+' button').forEach(b=>b.onclick=()=>{document.querySelectorAll(id+' button').forEach(x=>x.classList.remove('on'));b.classList.add('on');cb(b.dataset[attr])})}
+seg('#modeSeg','m',v=>{mode=+v;desc()});seg('#mkSeg','k',v=>{mk=v;baseInfo()});seg('#perSeg','p',v=>{per=v;baseInfo()});seg('#ratioSeg','r',v=>ratio=v);seg('#nSeg','n',v=>total=+v);
+function desc(){
+  $('#modeDesc').textContent=mode==1?'돌파 직후 차트를 보고, 이 매수가 성공할지 실패할지 맞춥니다. 정답 +10점, 연속 정답 보너스.':mode==2?'서로 다른 4개 돌파 중 수익률이 가장 높은 차트를 고릅니다. 1등 +15점, 2등 +5점.':'돌파일 종가에 매수할지 패스할지 고르고, 매수하면 하루씩 열면서 직접 매도합니다. 손익(R)이 점수입니다.';
+  $('#ratioBox').classList.toggle('hide',mode!=1);
+}
+/* 실전 기저율: 선택한 시장·기간의 전체 돌파 사례 성공률/평균 수익 */
+function baseStat(m,p){let n=0,w=0,s=0;(m=='ALL'?['KR','US']:[m]).forEach(k=>(p=='ALL'?['pre','post']:[p]).forEach(pp=>{const o=(BASE[k]||{})[pp]||{};Object.values(o).forEach(b=>{n+=b[0];w+=b[1];s+=b[2]*b[0]})}));return n?{n,win:w/n*100,avg:s/n}:null}
+function baseInfo(){const b=baseStat(mk,per);$('#baseInfo').innerHTML=b?`실전 기저율: 돌파 ${b.n.toLocaleString()}건 중 20일 +3% 초과는 <b>${b.win.toFixed(0)}%</b>, 평균 수익 <b>${fmt(b.avg)}</b> (손절 포함). 모두 '실패'라고 찍어도 ${(100-b.win).toFixed(0)}% 맞습니다.`:''}
+desc();baseInfo();
+
+const pool=()=>Q.filter(q=>(mk=='ALL'||q.mk==mk)&&(per=='ALL'||q.per==per));
+function pickQ(){let p=pool().filter(q=>!used.has(q));
+  if(mode==1&&ratio=='bal'){const w=Math.random()<.5,b=p.filter(q=>q.ok==w);if(b.length)p=b}
+  const q=p[Math.floor(Math.random()*p.length)];used.add(q);return q}
+function pick4(){
+  // 서로 다른 패턴 4개(가능하면), 같은 시장 내에서
+  const pats=Object.keys(PAT).sort(()=>Math.random()-.5);
+  const res=[];const m=mk=='ALL'?(Math.random()<.5?'KR':'US'):mk;
+  for(const p of pats){const c=Q.filter(q=>q.mk==m&&q.pat==p&&(per=='ALL'||q.per==per)&&!used.has(q));if(c.length)res.push(c[Math.floor(Math.random()*c.length)])}
+  res.forEach(q=>used.add(q));return res.sort(()=>Math.random()-.5);
+}
+
+/* ---------- 차트 ---------- */
+function ma(a,n){return a.map((_,i)=>i<n-1?null:a.slice(i-n+1,i+1).reduce((x,y)=>x+y,0)/n)}
+function setup(cv,h){const d=window.devicePixelRatio||1,w=cv.clientWidth;cv.width=w*d;cv.height=h*d;cv.style.height=h+'px';const g=cv.getContext('2d');g.setTransform(d,0,0,d,0,0);return[g,w,h]}
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function draw(cv,q,upto,h,opt={}){
+  // upto: 표시할 봉 수 (PRE 이상이면 돌파 이후 공개)
+  const[g,W,H]=setup(cv,h);const bg=css('--bg'),sub=css('--sub');
+  g.fillStyle=bg;g.fillRect(0,0,W,H);
+  const extra=opt.extra??HOLD+4,N=PRE+extra,vh=Math.round(H*.18),ph=H-vh-4,pad=46;
+  const n=Math.min(upto,q.c.length);
+  let lo=1e9,hi=-1e9;for(let i=0;i<n;i++){lo=Math.min(lo,q.l[i]);hi=Math.max(hi,q.h[i])}
+  if(n>=PRE){lo=Math.min(lo,92);hi=Math.max(hi,100)}
+  const sp=(hi-lo)*.06;lo-=sp;hi+=sp;
+  const x=i=>(i+.5)*(W-pad)/N, y=p=>(hi-p)/(hi-lo)*ph;
+  const up=q.mk=='KR'?'#e5484d':'#3ecf8e',dn=q.mk=='KR'?'#4d8dff':'#e5484d';
+  // 격자 + 세로축(% vs 돌파일 종가)
+  g.font='11px system-ui';g.textAlign='left';g.lineWidth=1;
+  const steps=4;for(let k=0;k<=steps;k++){const p=lo+(hi-lo)*k/steps;g.strokeStyle=css('--line');g.beginPath();g.moveTo(0,y(p));g.lineTo(W-pad,y(p));g.stroke();g.fillStyle=sub;const r=p-100;g.fillText((r>0?'+':'')+r.toFixed(0)+'%',W-pad+4,Math.max(11,y(p)+4))}
+  // 이동평균
+  [[20,'#f5b84a'],[50,'#b07cff']].forEach(([m,col])=>{const a=ma(q.c,m);g.strokeStyle=col;g.lineWidth=1.2;g.beginPath();let s=false;for(let i=0;i<n;i++){if(a[i]==null)continue;s?g.lineTo(x(i),y(a[i])):g.moveTo(x(i),y(a[i]));s=true}g.stroke()});
+  // 거래량
+  for(let i=0;i<n;i++){const vv=Math.min(q.v[i],100)/100*(vh-2);g.fillStyle=(q.c[i]>=q.o[i]?up:dn)+'99';const bw=Math.max(1,(W-pad)/N*.7);g.fillRect(x(i)-bw/2,H-vv,bw,vv)}
+  // 캔들
+  const bw=Math.max(1.5,(W-pad)/N*.7);
+  for(let i=0;i<n;i++){const u=q.c[i]>=q.o[i];g.strokeStyle=g.fillStyle=u?up:dn;g.lineWidth=1;g.beginPath();g.moveTo(x(i),y(q.h[i]));g.lineTo(x(i),y(q.l[i]));g.stroke();const t=y(Math.max(q.o[i],q.c[i])),b=y(Math.min(q.o[i],q.c[i]));g.fillRect(x(i)-bw/2,t,bw,Math.max(1,b-t))}
+  // 진입/손절선, 돌파일 표시
+  g.setLineDash([4,4]);g.strokeStyle=sub;g.beginPath();g.moveTo(0,y(100));g.lineTo(W-pad,y(100));g.stroke();
+  if(n>=PRE){g.strokeStyle=css('--bad');g.beginPath();g.moveTo(0,y(92));g.lineTo(W-pad,y(92));g.stroke()}
+  g.setLineDash([]);
+  g.fillStyle=css('--acc');g.beginPath();const bx=x(PRE-1);g.moveTo(bx,y(q.l[PRE-1])+4);g.lineTo(bx-4,y(q.l[PRE-1])+11);g.lineTo(bx+4,y(q.l[PRE-1])+11);g.fill();
+  if(n>PRE){g.strokeStyle=css('--acc')+'88';g.beginPath();g.moveTo(bx,0);g.lineTo(bx,ph);g.stroke()}
+  if(opt.exit){g.fillStyle=css('--warn');g.beginPath();g.arc(x(opt.exit[0]),y(opt.exit[1]),4.5,0,7);g.fill()}
+  if(opt.label){g.fillStyle=sub;g.font='bold 13px system-ui';g.fillText(opt.label,8,16)}
+}
+function drawIdx(cv,q,upto,ex){
+  const[g,W,H]=setup(cv,64);g.fillStyle=css('--bg');g.fillRect(0,0,W,H);
+  const names=Object.keys(q.idx),cols=['#4da3ff','#f5b84a'],pad=46,N=PRE+(ex??HOLD+4),n=Math.min(upto,q.c.length);
+  let lo=1e9,hi=-1e9;names.forEach(k=>{for(let i=0;i<n;i++){lo=Math.min(lo,q.idx[k][i]);hi=Math.max(hi,q.idx[k][i])}});
+  const sp=(hi-lo)*.1||1;lo-=sp;hi+=sp;
+  names.forEach((k,j)=>{g.strokeStyle=cols[j];g.lineWidth=1.5;g.beginPath();for(let i=0;i<n;i++){const X=(i+.5)*(W-pad)/N,Y=(hi-q.idx[k][i])/(hi-lo)*(H-6)+3;i?g.lineTo(X,Y):g.moveTo(X,Y)}g.stroke();const e=Math.min(n,PRE)-1,last=q.idx[k][e]/q.idx[k][Math.max(0,e-60)]*100-100;g.fillStyle=cols[j];g.font='11px system-ui';g.fillText(k,W-pad+3,12+j*26);g.fillText((last>0?'+':'')+last.toFixed(0)+'%',W-pad+3,24+j*26)});
+}
+function animate(fn,from,to,done){clearInterval(timer);let i=from;timer=setInterval(()=>{i++;fn(i);if(i>=to){clearInterval(timer);done&&done()}},45)}
+
+/* ---------- 흐름 ---------- */
+$('#startBtn').onclick=()=>{used=new Set();round=0;score=0;streak=0;right=0;tBuys=tSumR=tWins=tPass=0;$('#menu').classList.add('hide');$('#end').classList.add('hide');$('#game').classList.remove('hide');next()};
+function setHud(){$('#prog').textContent=`${round}/${total} 라운드`;$('#score').textContent=score;$('#streak').textContent=streak}
+function next(){
+  if(round>=total)return finish();
+  window.scrollTo(0,0);
+  round++;locked=false;setHud();$('#result').classList.add('hide');$('#nextBtn').classList.add('hide');
+  if(mode!=2){
+    $('#q1').classList.remove('hide');$('#q2').classList.add('hide');
+    cur=pickQ();$('#mkTag').textContent=cur.mk=='KR'?'🇰🇷 국장':'🇺🇸 미장';
+    const m3=mode==3,ex=m3?POST+2:undefined;
+    $('#ans1').classList.toggle('hide',m3);$('#ans3').classList.toggle('hide',!m3);
+    $('#q1hint').textContent=m3?'매수할까요, 패스할까요? (매수가 = 돌파일 종가)':'돌파일 종가 매수 시 20일 후 +3% 초과?';
+    $('#idxLegend').textContent='하단: 같은 기간 지수 (우측 숫자 = 돌파 직전 60일 등락)';
+    requestAnimationFrame(()=>{draw($('#c1'),cur,PRE,300,{extra:ex});drawIdx($('#i1'),cur,PRE,ex)});
+    if(m3){T={k:0,bought:false};tradeBtns()}
+  }else{
+    $('#q1').classList.add('hide');$('#q2').classList.remove('hide');
+    cur=pick4();pickIdx=-1;$('#pick2').disabled=true;$('#pick2').classList.remove('hide');
+    const box=$('#opts');box.innerHTML='';
+    cur.forEach((q,i)=>{const d=document.createElement('div');d.className='card opt';d.innerHTML=`<span class="n">${'①②③④'[i]}</span><canvas></canvas>`;d.onclick=()=>{if(locked)return;pickIdx=i;[...box.children].forEach((c,j)=>c.classList.toggle('sel',j==i));$('#pick2').disabled=false};box.appendChild(d)});
+    requestAnimationFrame(()=>{[...box.children].forEach((d,i)=>draw(d.querySelector('canvas'),cur[i],PRE,190,{label:'    '}))});
+    $('#idxLegend').textContent='';
+  }
+}
+let pickIdx=-1;
+function bump(p,ok){st.pat[p]=st.pat[p]||{n:0,ok:0};st.pat[p].n++;if(ok)st.pat[p].ok++}
+function fmt(r){return (r>0?'+':'')+r.toFixed(1)+'%'}
+function featLine(q){const f=q.f||{};return `거래량×${f.vx} · 52주 고점 대비 ${fmt(f.nh)} · RS ${f.rs!=null?'상위 '+(100-f.rs)+'%':'-'}`+(f.sec!=null?` · 업종 내 상위 ${100-f.sec}%`:'')}
+function featTable(q){
+  const f=q.f||{},row=(a,b)=>`<tr><td>${a}</td><td>${b}</td></tr>`;
+  const mkt=f.m!=null?`${f.m}/3 충족 · 분산일 ${f.d}개`:'-';
+  return `<div class="sub" style="margin-top:10px">돌파일 기준 지표</div><table>`+row('거래량 (20일 평균 대비)','×'+f.vx)+row('52주 고점 대비',fmt(f.nh))+row('최근 3개월 수익률',fmt(f.r3))+row('종합 RS (전 종목 중)',f.rs!=null?'상위 '+(100-f.rs)+'%':'-')+row('업종 내 위치',f.sec!=null?'상위 '+(100-f.sec)+'%':'-')+row('지수 상태 (50일선 위·상승 등)',mkt)+`</table><div class="sub" style="margin-top:4px">백테스트에서 이 지표들은 돌파 성과를 거의 가르지 못했습니다. 미장의 '업종 내 상위 20%'만 일관되게 소폭 우위였습니다.</div>`;
+}
+/* ---------- 매매 연습 ---------- */
+let T=null;const EX3=POST+2;
+function ema(a,n){const k=2/(n+1);let p=0;return a.map((x,i)=>{p=i?x*k+p*(1-k):x;return p})}
+function ruleExit(q){ // 손절 -8% + 50일선 종가 이탈 시 다음날 시가 매도
+  const e=ema(q.c,50),L=q.c.length;
+  for(let j=PRE;j<L;j++){if(q.o[j]<=92)return q.o[j]-100;if(q.l[j]<=92)return -8;if(q.c[j]<e[j])return(j+1<L?q.o[j+1]:q.c[j])-100}
+  return q.c[L-1]-100;
+}
+function drawTrade(n,exit){draw($('#c1'),cur,n,300,{extra:EX3,exit});drawIdx($('#i1'),cur,n,EX3)}
+function tradeBtns(){
+  const b=$('#tBtns'),i=$('#tInfo');
+  if(!T.bought){
+    i.textContent='돌파일 종가 = 100. 손절선 92(-8%)는 자동 적용됩니다.';
+    b.innerHTML='<button class="up grow" id="tBuy">매수</button><button class="grow" id="tPass">패스</button>';
+    $('#tBuy').onclick=()=>{T.bought=true;T.k=0;tradeBtns()};$('#tPass').onclick=()=>tradeEnd(null,'pass');
+  }else{
+    const j=PRE-1+T.k,p=cur.c[j]-100;
+    i.innerHTML=`보유 <b>${T.k}일차</b> · 평가 <b class="${p>=0?'good':'bad'}">${fmt(p)}</b> (최대 ${POST}일, 남은 ${POST-T.k}일)`;
+    b.innerHTML=`<button class="pri grow" id="tHold">하루 더 보유</button><button class="dn grow" id="tSell" ${T.k<1?'disabled':''}>오늘 종가 매도</button>`;
+    $('#tHold').onclick=tradeHold;$('#tSell').onclick=()=>tradeEnd(cur.c[j],'sold');
+  }
+}
+function tradeHold(){
+  if(locked)return;T.k++;const j=PRE-1+T.k,q=cur;drawTrade(PRE+T.k);
+  if(q.o[j]<=92)return tradeEnd(q.o[j],'gap');
+  if(q.l[j]<=92)return tradeEnd(92,'stop');
+  if(T.k>=POST)return tradeEnd(q.c[j],'time');
+  tradeBtns();
+}
+function tradeEnd(price,why){
+  if(locked)return;locked=true;
+  const q=cur,buy=price!=null,from=PRE+(buy?T.k:0),rr=ruleExit(q),g=st.g3;
+  let pts=0,R=0,ret=0;
+  g.n++;g.ruleN++;g.ruleR+=rr/8;
+  if(buy){ret=price-100;R=ret/8;pts=Math.round(R*10);tBuys++;tSumR+=R;g.buy++;g.sumR+=R;if(ret>0){tWins++;g.win++;streak++}else streak=0}
+  else{tPass++;g.pass++;if(q.ret<=0)g.avoid++;else if(q.ok)g.miss++}
+  score+=pts;store.set('bo_stats',st);setHud();$('#ans3').classList.add('hide');
+  const exit=buy?[PRE-1+T.k,price]:null;
+  animate(i=>drawTrade(i,exit),from,PRE+POST,()=>{
+    drawTrade(PRE+POST,exit);
+    const why_={stop:'<span class="bad">손절 -8% 발동</span>',gap:'<span class="bad">갭 하락으로 손절가 아래에서 청산</span>',time:`${POST}일 보유 후 종가 청산`,sold:`${T.k}일차 종가 매도`,pass:'패스'}[why];
+    const b=baseStat(q.mk,q.per);
+    const cmp=`<tr><td>20일 보유 (손절 포함)</td><td class="${q.ret>0?'good':'bad'}">${fmt(q.ret)}</td></tr><tr><td>50일선 이탈 시 매도 (손절 포함)</td><td class="${rr>0?'good':'bad'}">${fmt(rr)}</td></tr><tr><td>보유 20일 중 최고/최저</td><td>${fmt(q.max)} / ${fmt(q.min)}</td></tr>`;
+    const head=buy?`<div class="big ${ret>0?'good':'bad'}">${fmt(ret)} · ${R>=0?'+':''}${R.toFixed(1)}R · ${pts>=0?'+':''}${pts}점</div>`
+      :`<div class="big warn">패스 · 0점</div><div class="sub">${q.ret<=0?'손실 구간을 피했습니다.':q.ok?'성공한 돌파를 놓쳤습니다.':'작은 수익 구간이라 큰 차이는 없었습니다.'}</div>`;
+    const r=$('#result');r.classList.remove('hide');
+    r.innerHTML=`${head}<div>${info(q)}</div><div class="sub" style="margin-top:4px">${why_}${b?` · 같은 범위 돌파 전체 평균 ${fmt(b.avg)} (성공률 ${b.win.toFixed(0)}%)`:''}</div><table style="margin-top:8px">${cmp}</table>`+featTable(q);
+    $('#nextBtn').classList.remove('hide');$('#nextBtn').textContent=round>=total?'결과 보기':'다음';$('#nextBtn').scrollIntoView({behavior:'smooth',block:'end'});
+  });
+}
+function info(q){return `${q.mk=='KR'?'🇰🇷':'🇺🇸'} <b>${q.name}</b> (${q.code}) · ${q.date} 돌파 · <span class="tag">${PAT[q.pat]}</span>`}
+document.querySelectorAll('#ans1 button').forEach(b=>b.onclick=()=>{
+  if(locked)return;locked=true;const a=b.dataset.a=='1',ok=a==cur.ok;
+  st.g1.n++;if(ok)st.g1.ok++;bump(cur.pat,ok);
+  if(ok){streak++;right++;score+=10+Math.min(streak-1,5)*2}else streak=0;
+  store.set('bo_stats',st);setHud();
+  $('#ans1').classList.add('hide');
+  const q=cur;
+  animate(i=>{draw($('#c1'),q,i,300);drawIdx($('#i1'),q,i)},PRE,PRE+HOLD+2,()=>{
+    const r=$('#result');r.classList.remove('hide');
+    r.innerHTML=`<div class="big ${ok?'good':'bad'}">${ok?'정답! ':'오답 '}${ok&&streak>1?'🔥'+streak+'연속':''}</div>
+      <div>${info(q)}</div>
+      <div style="margin-top:6px">20일 결과 <b class="${q.ret>0?'good':'bad'}">${fmt(q.ret)}</b> ${q.stop?'<span class="bad">(-8% 손절 발동)</span>':''}<br>
+      <span class="sub">보유 중 최고 ${fmt(q.max)} / 최저 ${fmt(q.min)} · 판정 ${q.ok?'성공':'실패'}</span></div>`+featTable(q);
+    $('#nextBtn').classList.remove('hide');$('#nextBtn').textContent=round>=total?'결과 보기':'다음';$('#nextBtn').scrollIntoView({behavior:'smooth',block:'end'});
+  });
+});
+$('#pick2').onclick=()=>{
+  if(pickIdx<0||locked)return;locked=true;$('#pick2').classList.add('hide');
+  const rets=cur.map(q=>q.ret),order=[...rets.keys()].sort((a,b)=>rets[b]-rets[a]);
+  const rank=order.indexOf(pickIdx);let pts=0;
+  if(rank==0){pts=15;right++;streak++}else{streak=0;if(rank==1)pts=5}
+  score+=pts;st.g2.n++;if(rank==0)st.g2.best++;if(rank==1)st.g2.second++;
+  cur.forEach(q=>bump(q.pat,order[0]==cur.indexOf(q)));store.set('bo_stats',st);setHud();
+  const cvs=[...document.querySelectorAll('#opts canvas')];
+  animate(i=>cvs.forEach((cv,j)=>draw(cv,cur[j],i,190,{label:'    '})),PRE,PRE+HOLD+2,()=>{
+    const r=$('#result');r.classList.remove('hide');
+    r.innerHTML=`<div class="big ${rank==0?'good':rank==1?'warn':'bad'}">${rank==0?'정답! 1등을 골랐어요 +15':rank==1?'아쉬워요, 2등 +5':'순위권 밖 +0'}</div>`+
+      order.map((j,k)=>`<div style="margin-top:6px">${k+1}위 ${'①②③④'[j]} <b class="${rets[j]>0?'good':'bad'}">${fmt(rets[j])}</b>${j==pickIdx?' ← 내 선택':''}<br><span class="sub">${info(cur[j])}<br>${featLine(cur[j])}</span></div>`).join('');
+    $('#nextBtn').classList.remove('hide');$('#nextBtn').textContent=round>=total?'결과 보기':'다음';$('#nextBtn').scrollIntoView({behavior:'smooth',block:'end'});
+  });
+  [...document.querySelectorAll('.opt')].forEach((d,j)=>{d.querySelector('.n').textContent='①②③④'[j]+' '+(order.indexOf(j)+1)+'위'});
+};
+$('#nextBtn').onclick=next;
+function finish(){
+  $('#game').classList.add('hide');$('#end').classList.remove('hide');
+  $('#endScore').textContent=score+'점';
+  $('#endDetail').textContent=mode==3?`매수 ${tBuys}회(수익 ${tWins}회) · 평균 ${tBuys?(tSumR/tBuys).toFixed(2):'0'}R · 패스 ${tPass}회`:`${total}라운드 중 ${right}개 정답 (${Math.round(right/total*100)}%)`;
+}
+$('#againBtn').onclick=()=>{$('#end').classList.add('hide');$('#menu').classList.remove('hide')};
+
+/* ---------- 기록 ---------- */
+function showStats(){
+  const p=Object.keys(PAT).map(k=>{const s=st.pat[k]||{n:0,ok:0};return `<tr><td>${PAT[k]}</td><td>${s.n}</td><td>${s.n?Math.round(s.ok/s.n*100)+'%':'-'}</td></tr>`}).join('');
+  const g3=st.g3,rows=[['KR','ALL'],['KR','pre'],['KR','post'],['US','ALL'],['US','pre'],['US','post']].map(([m,p])=>{const b=baseStat(m,p);return b?`<tr><td>${m=='KR'?'국장':'미장'} ${p=='ALL'?'전체':p=='pre'?'2020 이전':'2020 이후'}</td><td>${b.n.toLocaleString()}</td><td>${b.win.toFixed(0)}%</td><td>${fmt(b.avg)}</td></tr>`:''}).join('');
+  $('#statBody').innerHTML=`<p>③ 매매 연습: ${g3.n}문제 · 매수 ${g3.buy}회(수익 ${g3.win}) · 평균 ${g3.buy?(g3.sumR/g3.buy).toFixed(2):'0'}R · 패스 ${g3.pass}회 (손실 회피 ${g3.avoid} / 놓친 성공 ${g3.miss})<br><span class="sub">같은 문제를 기계적으로 '매수 후 50일선 이탈 매도'했다면 평균 ${g3.ruleN?(g3.ruleR/g3.ruleN).toFixed(2):'-'}R</span></p>
+  <p>① 성공/실패: ${st.g1.n}문제 중 ${st.g1.ok} 정답 (${st.g1.n?Math.round(st.g1.ok/st.g1.n*100):0}%) <span class="sub">※ 찍어도 50%</span><br>
+  ② 베스트 고르기: ${st.g2.n}회 중 1등 ${st.g2.best}, 2등 ${st.g2.second} <span class="sub">※ 찍으면 1등 25%</span></p>
+  <table><tr><th>패턴</th><th>출제</th><th>정답률</th></tr>${p}</table>
+  <div class="sub" style="margin:10px 0 4px">실전 기저율 (전체 돌파 사례, 20일 +3% 초과 기준)</div>
+  <table><tr><th>범위</th><th>건수</th><th>성공률</th><th>평균 수익</th></tr>${rows}</table>`;
+  $('#stats').classList.remove('hide');
+}
+$('#statBtn').onclick=showStats;$('#statClose').onclick=()=>$('#stats').classList.add('hide');
+$('#statReset').onclick=()=>{if(confirm('기록을 모두 지울까요?')){st={g1:{n:0,ok:0},g2:{n:0,best:0,second:0},pat:{},g3:{n:0,buy:0,win:0,sumR:0,pass:0,avoid:0,miss:0,ruleR:0,ruleN:0}};store.set('bo_stats',st);showStats()}};
+window.addEventListener('resize',()=>{if(!$('#game').classList.contains('hide')&&cur&&!locked){if(mode==1){draw($('#c1'),cur,PRE,300);drawIdx($('#i1'),cur,PRE)}else if(mode==3)drawTrade(PRE+(T&&T.bought?T.k:0))}});
+</script>
+</body>
+</html>
