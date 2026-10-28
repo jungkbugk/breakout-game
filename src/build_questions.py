@@ -2,6 +2,8 @@
 
 기존 백테스트 데이터(backtest_v2/data)에서 돌파 사례를 찾아 문제 JSON으로 만든다.
 - 시장 x 패턴 x 기간(2020 전/후)별로 '실전 비율 그대로' 무작위 추출 (성공/실패 균형 맞추지 않음)
+- 매수 시점은 피벗(직전 60일 고점) 돌파 순간: 체결가 = max(시가, 피벗), 갭 5% 초과 제외.
+  돌파일 장 시작 전까지의 정보만으로 사례를 고른다(종가·거래량 조건 사용 안 함).
 - 전체 사례의 실제 성공률·평균수익을 base로 함께 저장
 - 정답 공개용 지표(거래량 배수, 52주 고점 대비, RS 순위, 업종 내 순위, 지수 상태) 포함
 출력: breakout_game/questions.json (index.html에 합쳐지기 전 원본)
@@ -72,7 +74,7 @@ def rank_panels(frames, sec):
 
 
 def find_events(df, min_value):
-    """돌파 사례 (인덱스, 패턴, 거래량배수, 52주 고점 대비, 3개월 수익률) 목록. df: 정제된 일봉."""
+    """피벗 돌파 사례 (인덱스, 패턴, 거래량배수, 52주 고점 대비, 3개월 수익률, 피벗, 진입가). df: 정제된 일봉."""
     if len(df) < 320:
         return []
     o, h, l, c, v = (df[k].to_numpy(float) for k in ["Open", "High", "Low", "Close", "Volume"])
@@ -91,46 +93,53 @@ def find_events(df, min_value):
     ev, last = [], -10**9
     n = len(df)
     for i in range(260, n - POST):
-        if not (c[i] > hi60[i] and v[i] >= 1.5 * vol20[i] and c[i] > o[i]):
+        P = hi60[i]
+        cp = c[i - 1]
+        # 전일까지의 정보: 피벗 근접(-10% 이내), 50일선 부근 이상. 당일은 피벗 도달 여부와 갭만 사용.
+        if not (h[i] >= P and o[i] <= 1.05 * P and 0.9 * P <= cp < P and cp >= ma50[i - 1] * 0.98):
             continue
         if val20[i] < min_value or i - last < MIN_GAP:
             continue
-        if c[i] < ma50[i] * 0.98 or c[i] / c[i - 1] > 1.2:
-            continue
-        if c[i] > hi250[i]:
+        if P >= 0.999 * hi250[i]:
             pat = "A"
-        elif r10[i] < 0.6 * r40[i] and c[i] > ma50[i]:
+        elif r10[i] < 0.6 * r40[i] and cp > ma50[i - 1]:
             pat = "C"
         elif box_hi[i] / box_lo[i] - 1 <= 0.28:
             pat = "B"
-        elif c[i] <= 0.8 * hi250[i]:
+        elif cp <= 0.8 * hi250[i]:
             pat = "D"
         else:
             continue
-        ev.append((i, pat, v[i] / vol20[i], c[i] / hi250[i] - 1, c[i] / c[i - 63] - 1))
+        E = max(o[i], P)
+        ev.append((i, pat, v[i] / vol20[i], cp / hi250[i] - 1, cp / c[i - 64] - 1, P, E))
         last = i
     return ev
 
 
-def outcome(df, i):
-    """돌파일 종가 진입, 손절 -8%, 20일 보유 후 청산."""
-    c = df["Close"].to_numpy(float)
-    l = df["Low"].to_numpy(float)
-    entry = c[i]
-    stopped = False
-    for k in range(1, HOLD + 1):
-        if l[i + k] <= entry * (1 + STOP):
-            stopped = True
+def outcome(df, i, E, P):
+    """피벗 체결가 E 진입, 손절 -8%(갭하락 시 시가 청산), 진입일 포함 20거래일 보유 후 종가 청산.
+    진입일: 시가<피벗인 상승일은 저가가 체결 전에 나온 것으로 보아 손절을 적용하지 않는다."""
+    o, l, c = (df[k].to_numpy(float) for k in ["Open", "Low", "Close"])
+    stop = E * (1 + STOP)
+    ret, stopped = None, False
+    for k in range(0, HOLD + 1):
+        j = i + k
+        if k > 0 and o[j] <= stop:
+            ret, stopped = o[j] / E - 1, True
             break
-    ret = STOP if stopped else c[i + HOLD] / entry - 1
-    path = c[i + 1:i + HOLD + 1] / entry - 1
+        if l[j] <= stop and (k > 0 or o[j] >= P or c[j] < o[j]):
+            ret, stopped = STOP, True
+            break
+    if ret is None:
+        ret = c[i + HOLD] / E - 1
+    path = c[i:i + HOLD + 1] / E - 1
     return ret, float(path.max()), float(path.min()), stopped
 
 
-def pack(df, i, idx_frames):
-    sl = df.iloc[i - PRE + 1:i + POST + 1]
-    base = float(df["Close"].iloc[i])
-    scale = 100.0 / base
+def pack(df, i, E, P, idx_frames):
+    """앞 PRE개 봉은 돌파 전날까지, 이후 POST개 봉은 진입일(i)부터. 가격은 진입가=100 기준."""
+    sl = df.iloc[i - PRE:i + POST]
+    scale = 100.0 / E
 
     def r(a):
         return [round(float(x) * scale, 2) for x in a]
@@ -140,25 +149,25 @@ def pack(df, i, idx_frames):
     q = {
         "o": r(sl["Open"]), "h": r(sl["High"]), "l": r(sl["Low"]), "c": r(sl["Close"]),
         "v": [int(round(x / vmax * 100)) for x in vol],
-        "idx": {},
+        "idx": {}, "pv": round(P * scale, 2),
     }
     dates = sl.index
     for name, f in idx_frames.items():
         g = f["Close"].reindex(dates, method="ffill")
         ref = g.iloc[PRE - 1]
         q["idx"][name] = [round(float(x / ref * 100), 2) for x in g]
-    return q, dates[PRE - 1]
+    return q, df.index[i]
 
 
 def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
     frames = {k: clean(v) for k, v in frames.items()}
     groups, base = {}, {}
     for code, df in frames.items():
-        for i, pat, vx, nh, r3 in find_events(df, min_value):
-            ret, mx, mn, stopped = outcome(df, i)
+        for i, pat, vx, nh, r3, P, E in find_events(df, min_value):
+            ret, mx, mn, stopped = outcome(df, i, E, P)
             d = df.index[i]
             per = "pre" if d < SPLIT else "post"
-            groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, vx, nh, r3))
+            groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, vx, nh, r3, P, E))
             b = base.setdefault(per, {}).setdefault(pat, [0, 0, 0.0])
             b[0] += 1
             b[1] += int(ret > WIN)
@@ -172,16 +181,17 @@ def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
         rng.shuffle(lst)
         wins = sum(1 for x in lst if x[3] > WIN)
         print(tag, pat, per, "후보", len(lst), "성공률", round(wins / len(lst) * 100), "%")
-        for code, df, i, ret, mx, mn, stopped, vx, nh, r3 in lst[:PER_GROUP]:
-            q, date = pack(df, i, idx_frames)
-            f = {"vx": round(vx, 1), "nh": round(nh * 100, 1), "r3": round(r3 * 100, 1)}
-            if date in rs.index and code in rs.columns:
-                v = rs.at[date, code]
+        for code, df, i, ret, mx, mn, stopped, vx, nh, r3, P, E in lst[:PER_GROUP]:
+            q, date = pack(df, i, E, P, idx_frames)
+            prev = df.index[i - 1]   # 지표는 돌파 전날 기준
+            f = {"vx": round(vx, 1), "vok": bool(vx >= 1.5), "nh": round(nh * 100, 1), "r3": round(r3 * 100, 1)}
+            if prev in rs.index and code in rs.columns:
+                v = rs.at[prev, code]
                 f["rs"] = int(round(v * 100)) if np.isfinite(v) else None
                 if code in sp.columns:
-                    v = sp.at[date, code]
+                    v = sp.at[prev, code]
                     f["sec"] = int(round(v * 100)) if np.isfinite(v) else None
-                g = sg.loc[date]
+                g = sg.loc[prev]
                 if np.isfinite(g["ok"]):
                     f["m"], f["d"] = int(g["ok"]), int(g["dist"])
             q.update({
