@@ -28,6 +28,7 @@ WIN = 0.03      # 성공 기준(20일 후 수익률)
 PER_GROUP = 50  # 시장 x 패턴 x 기간별 문제 수
 MIN_GAP = 25    # 같은 종목 사례 간 최소 간격
 SPLIT = pd.Timestamp("2020-01-01")
+COST = {"KR": 0.004, "US": 0.003}   # 왕복 비용(수수료+세금+슬리피지) 비율
 
 PATTERNS = {
     "A": "52주 신고가 돌파",
@@ -159,41 +160,168 @@ def pack(df, i, E, P, idx_frames):
     return q, df.index[i]
 
 
+# 지표 구간 (키, 이름, [(라벨, 하한, 상한)]) — 하한 이상 상한 미만이면 해당 구간
+INF = float("inf")
+FEATS = [
+    ("vx", "돌파일 거래량(20일 평균 대비)", [("1배 미만", -INF, 1), ("1~1.5배", 1, 1.5), ("1.5~2배", 1.5, 2), ("2~3배", 2, 3), ("3배 이상", 3, INF)]),
+    ("nh", "52주 고점 대비", [("고점 -3% 이내", -3, INF), ("-3~-10%", -10, -3), ("-10~-20%", -20, -10), ("-20% 이하", -INF, -20)]),
+    ("r3", "최근 3개월 수익률", [("0% 미만", -INF, 0), ("0~20%", 0, 20), ("20~50%", 20, 50), ("50% 이상", 50, INF)]),
+    ("rs", "종합 RS(전 종목)", [("상위 10% 이내", 90, INF), ("상위 10~20%", 80, 90), ("상위 20~50%", 50, 80), ("하위 50%", -INF, 50)]),
+    ("sec", "업종 내 위치", [("상위 10% 이내", 90, INF), ("상위 10~20%", 80, 90), ("상위 20~50%", 50, 80), ("하위 50%", -INF, 50)]),
+    ("m", "지수 상태(충족 개수)", [("0~1 / 3", -INF, 2), ("2 / 3", 2, 3), ("3 / 3", 3, INF)]),
+    ("d", "지수 분산일(25일)", [("0~2개", -INF, 3), ("3~5개", 3, 6), ("6개 이상", 6, INF)]),
+]
+RULES = ["h20", "h40", "ma5", "ma10", "ma20", "ema50", "pyr"]
+
+
+def bucket_of(key, v):
+    if v is None:
+        return -1
+    for k, _, bs in FEATS:
+        if k == key:
+            for bi, (_, lo, hi) in enumerate(bs):
+                if lo <= v < hi:
+                    return bi
+    return -1
+
+
+def ma_series(c, kind, n):
+    a = np.asarray(c, float)
+    if kind == "ema":
+        k = 2 / (n + 1)
+        out = np.empty(len(a))
+        p = 0.0
+        for i, x in enumerate(a):
+            p = x if i == 0 else x * k + p * (1 - k)
+            out[i] = p
+        return out
+    cs = np.cumsum(np.insert(a, 0, 0.0))
+    out = np.full(len(a), np.nan)
+    out[n - 1:] = (cs[n:] - cs[:-n]) / n
+    return out
+
+
+def sim_rule(o, h, l, c, pv, rule):
+    """진입가=100 기준 배열로 청산 규칙을 시뮬레이션 -> (손익%, 청산 봉 인덱스, 투입 단위 수).
+    template.html의 simRule과 동일해야 한다. 손절 -8%는 모든 규칙에 포함."""
+    e, L = PRE, len(c)
+    estop = o[e] >= pv - 1e-6 or c[e] < o[e]
+    ma = None
+    if rule.startswith("ma"):
+        ma = ma_series(c, "sma", int(rule[2:]))
+    elif rule == "ema50":
+        ma = ma_series(c, "ema", 50)
+    elif rule == "pyr":
+        ma = ma_series(c, "sma", 10)
+    add = None
+
+    def pn(px):
+        return px - 100 + ((px - add) if add is not None else 0.0)
+
+    for j in range(e, L):
+        un = 2 if add is not None else 1
+        if j > e and o[j] <= 92:
+            return pn(o[j]), j, un
+        if l[j] <= 92 and (j > e or estop):
+            return pn(92.0), j, un
+        if rule == "h20" and j == e + 20:
+            return pn(c[j]), j, un
+        if rule == "pyr" and add is None and c[j] >= 105:
+            add = c[j]
+            un = 2
+        if ma is not None and not np.isnan(ma[j]) and c[j] < ma[j]:
+            if j + 1 < L:
+                return pn(o[j + 1]), j + 1, un
+            return pn(c[j]), j, un
+    return pn(c[L - 1]), L - 1, (2 if add is not None else 1)
+
+
+def scaled_arrays(df, i, E):
+    sl = df.iloc[i - PRE:i + POST]
+    s = 100.0 / E
+    return [np.round(sl[k].to_numpy(float) * s, 2) for k in ("Open", "High", "Low", "Close")]
+
+
+def feats_of(prev, code, vx, nh, r3, rs, sp, sg):
+    f = {"vx": round(vx, 1), "vok": bool(vx >= 1.5), "nh": round(nh * 100, 1), "r3": round(r3 * 100, 1)}
+    if prev in rs.index and code in rs.columns:
+        v = rs.at[prev, code]
+        f["rs"] = int(round(v * 100)) if np.isfinite(v) else None
+        if code in sp.columns:
+            v = sp.at[prev, code]
+            f["sec"] = int(round(v * 100)) if np.isfinite(v) else None
+        g = sg.loc[prev]
+        if np.isfinite(g["ok"]):
+            f["m"], f["d"] = int(g["ok"]), int(g["dist"])
+    f["b"] = [bucket_of(k, f.get(k)) for k, _, _ in FEATS]
+    return f
+
+
 def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
     frames = {k: clean(v) for k, v in frames.items()}
+    sg = state.reindex(rs.index, method="ffill")
+    cost = COST[tag] * 100
     groups, base = {}, {}
+    fs = {k: [[0, 0, 0.0, 0, 0.0] for _ in bs] for k, _, bs in FEATS}
+    rl = {r: [] for r in RULES}
     for code, df in frames.items():
         for i, pat, vx, nh, r3, P, E in find_events(df, min_value):
             ret, mx, mn, stopped = outcome(df, i, E, P)
             d = df.index[i]
             per = "pre" if d < SPLIT else "post"
-            groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, vx, nh, r3, P, E))
-            b = base.setdefault(per, {}).setdefault(pat, [0, 0, 0.0])
+            f = feats_of(df.index[i - 1], code, vx, nh, r3, rs, sp, sg)
+            groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, f, P, E))
+            b = base.setdefault(per, {}).setdefault(pat, [0, 0, 0.0, 0, 0.0])
             b[0] += 1
             b[1] += int(ret > WIN)
             b[2] += ret
+            b[3] += int(ret - COST[tag] > WIN)
+            b[4] += ret - COST[tag]
+            for (k, _, _), bi in zip(FEATS, f["b"]):
+                if bi >= 0:
+                    s = fs[k][bi]
+                    s[0] += 1
+                    s[1] += int(ret > WIN)
+                    s[2] += ret
+                    s[3] += int(ret - COST[tag] > WIN)
+                    s[4] += ret - COST[tag]
+            o_, h_, l_, c_ = scaled_arrays(df, i, E)
+            pv = P * 100.0 / E
+            for r in RULES:
+                pnl, jj, un = sim_rule(o_, h_, l_, c_, pv, r)
+                rl[r].append((pnl, un, jj - PRE))
     for per in base:
         for pat, b in base[per].items():
-            b[2] = round(b[2] / b[0] * 100, 2)
-    sg = state.reindex(rs.index, method="ffill")
+            n = b[0]
+            b[2] = round(b[2] / n * 100, 2)
+            b[4] = round(b[4] / n * 100, 2)
+    # 지표 구간 통계: [라벨, 건수, 성공률%, 평균%, 비용반영 성공률%, 비용반영 평균%]
+    fstat = {}
+    for k, nm, bs in FEATS:
+        rows = []
+        for (lab, _, _), s in zip(bs, fs[k]):
+            n = s[0]
+            rows.append([lab, n, round(s[1] / n * 100, 1) if n else None, round(s[2] / n * 100, 2) if n else None,
+                         round(s[3] / n * 100, 1) if n else None, round(s[4] / n * 100, 2) if n else None])
+        fstat[k] = {"name": nm, "rows": rows}
+    # 청산 규칙 통계: [건수, 평균, 이익비율, 평균이익, 평균손실, 평균보유일, 비용반영 이익비율, 비용반영 평균, 평균 투입단위]
+    rstat = {}
+    for r, lst in rl.items():
+        a = np.array(lst, float)
+        pnl, un, hold = a[:, 0], a[:, 1], a[:, 2]
+        net = pnl - cost * un
+        w, ls = pnl[pnl > 0], pnl[pnl <= 0]
+        rstat[r] = [len(a), round(float(pnl.mean()), 2), round(float((pnl > 0).mean() * 100), 1),
+                    round(float(w.mean()), 2) if len(w) else 0, round(float(ls.mean()), 2) if len(ls) else 0,
+                    round(float(hold.mean()), 1), round(float((net > 0).mean() * 100), 1), round(float(net.mean()), 2),
+                    round(float(un.mean()), 2)]
     out = []
     for (pat, per), lst in sorted(groups.items()):
         rng.shuffle(lst)
         wins = sum(1 for x in lst if x[3] > WIN)
         print(tag, pat, per, "후보", len(lst), "성공률", round(wins / len(lst) * 100), "%")
-        for code, df, i, ret, mx, mn, stopped, vx, nh, r3, P, E in lst[:PER_GROUP]:
+        for code, df, i, ret, mx, mn, stopped, f, P, E in lst[:PER_GROUP]:
             q, date = pack(df, i, E, P, idx_frames)
-            prev = df.index[i - 1]   # 지표는 돌파 전날 기준
-            f = {"vx": round(vx, 1), "vok": bool(vx >= 1.5), "nh": round(nh * 100, 1), "r3": round(r3 * 100, 1)}
-            if prev in rs.index and code in rs.columns:
-                v = rs.at[prev, code]
-                f["rs"] = int(round(v * 100)) if np.isfinite(v) else None
-                if code in sp.columns:
-                    v = sp.at[prev, code]
-                    f["sec"] = int(round(v * 100)) if np.isfinite(v) else None
-                g = sg.loc[prev]
-                if np.isfinite(g["ok"]):
-                    f["m"], f["d"] = int(g["ok"]), int(g["dist"])
             q.update({
                 "mk": tag, "pat": pat, "per": per, "ok": bool(ret > WIN),
                 "ret": round(ret * 100, 1), "max": round(mx * 100, 1), "min": round(mn * 100, 1),
@@ -201,7 +329,7 @@ def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
                 "date": date.strftime("%Y-%m-%d"), "f": f,
             })
             out.append(q)
-    return out, base
+    return out, base, fstat, rstat
 
 
 def main():
@@ -212,7 +340,7 @@ def main():
     kr_frames = {k: clean(v) for k, v in kr["data"].items()}
     kr_sec = {c: s for c, s in wics.items() if s and s != "없음" and c in kr_frames}
     rs, sp = rank_panels(kr_frames, kr_sec)
-    kr_out, kr_base = build_market("KR", kr_frames, kr["names"], {"코스피": ks, "코스닥": kq}, 2e9, rng,
+    kr_out, kr_base, kr_fs, kr_rs = build_market("KR", kr_frames, kr["names"], {"코스피": ks, "코스닥": kq}, 2e9, rng,
                                    idx_state(ks["Close"], ks["Volume"]), rs, sp)
 
     us = load("us_ohlcv_1500.pkl")
@@ -222,14 +350,16 @@ def main():
                  for t in us["Close"].columns}
     us_sec = {t: s for t, s in load("sectors.pkl").items() if isinstance(s, str) and s and t in us_frames}
     rs, sp = rank_panels(us_frames, us_sec)
-    us_out, us_base = build_market("US", us_frames, {}, idx, 1e7, rng,
+    us_out, us_base, us_fs, us_rs = build_market("US", us_frames, {}, idx, 1e7, rng,
                                    idx_state(etf[("Close", "SPY")].dropna(), etf[("Volume", "SPY")].dropna()), rs, sp)
 
     qs = kr_out + us_out
     rng.shuffle(qs)
     with open(os.path.join(HERE, "questions.json"), "w", encoding="utf-8") as f:
         json.dump({"patterns": PATTERNS, "pre": PRE, "post": POST, "hold": HOLD,
-                   "base": {"KR": kr_base, "US": us_base}, "q": qs},
+                   "base": {"KR": kr_base, "US": us_base}, "cost": COST,
+                   "fs": {"KR": kr_fs, "US": us_fs}, "rules": {"KR": kr_rs, "US": us_rs},
+                   "featKeys": [k for k, _, _ in FEATS], "q": qs},
                   f, ensure_ascii=False, separators=(",", ":"))
     print("문제", len(qs), "KR", len(kr_out), "US", len(us_out),
           "크기MB", round(os.path.getsize(os.path.join(HERE, "questions.json")) / 1e6, 2))
