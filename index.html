@@ -46,6 +46,11 @@ td:first-child,th:first-child{text-align:left}
   <div class="sub">종목·시기를 가린 차트로 돌파 감각을 훈련합니다.</div>
 
   <div id="menu">
+    <div class="card" id="dailyCard">
+      <b>📅 오늘의 문제</b>
+      <div class="sub" id="dailyInfo" style="margin:4px 0 8px"></div>
+      <div class="row"><button class="pri grow" id="dailyBtn"></button><button id="dailyShare" class="hide">결과 복사</button></div>
+    </div>
     <div class="card">
       <b>게임 방식</b>
       <div class="seg" id="modeSeg">
@@ -96,7 +101,8 @@ td:first-child,th:first-child{text-align:left}
       차트는 돌파 <b>전날</b>까지입니다. <b>피벗(직전 60일 고점)</b>을 돌파하는 순간 매수(갭 상승이면 시가, 갭 5% 초과 사례는 제외) → 손절 -8%(장중 저가 기준) → 진입일 포함 20거래일 보유 후 청산.<br>
       수익률이 <b>+3% 초과</b>면 성공, 아니면 실패. 세로축은 매수가 대비 %이고, 노랑=20일선, 보라=50일선, 파란 점선=피벗입니다.<br>
       ③ 매매 연습은 피벗 돌파 매수/패스를 고른 뒤 하루씩 열면서 직접 매도합니다. 손절 -8%는 자동, 손익을 R(1R=8%)로 채점합니다.<br>
-      ④ 연속 매매는 자본 100으로 시작해 돌파마다 비중(10~100%)을 정하고, 손절 -8%와 고른 청산 방식이 자동 적용됩니다. 끝나면 자본 곡선과 최대 낙폭을 보여줍니다.<br>
+      📅 오늘의 문제는 날짜가 같으면 누구에게나 같은 5문제가 나오고, 결과를 이모지로 복사해 공유할 수 있습니다.<br>
+      ④ 연속 매매는 자본 100으로 시작해 돌파마다 비중(10~100%)을 정하고, 연패·큰 수익 뒤에는 흔들리기 쉬운 순간을 알려 주며 복수·과신 매매를 점검합니다. 손절 -8%와 고른 청산 방식이 자동 적용됩니다. 끝나면 자본 곡선과 최대 낙폭을 보여줍니다.<br>
       "거래 비용"을 켜면 수수료·세금·슬리피지를 뺀 수익률로 성공 여부와 점수를 계산합니다.<br>
       <span class="warn">주의</span> 현재 상장 종목만 쓰므로 상장폐지 종목이 빠져 성공률이 실제보다 높게 나옵니다(생존 편향). 수수료·세금·슬리피지는 "거래 비용"을 켠 경우에만 반영됩니다.<br>
       국장은 빨강=상승/파랑=하락, 미장은 초록=상승/빨강=하락. 하단 얇은 선은 같은 시기의 지수입니다.
@@ -134,6 +140,10 @@ td:first-child,th:first-child{text-align:left}
     <div class="card" style="text-align:center">
       <div class="sub">결과</div><div class="big" id="endScore"></div><div class="sub" id="endDetail"></div>
       <canvas id="eqc" class="hide" style="margin-top:10px"></canvas>
+      <div id="shareBox" class="hide" style="margin-top:10px;text-align:left">
+        <textarea id="shareTx" readonly rows="4" style="width:100%;font:inherit;font-size:13px;color:var(--tx);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px;resize:none"></textarea>
+        <button class="pri" id="shareBtn" style="width:100%;margin-top:6px">결과 복사</button>
+      </div>
       <div class="sub hide" id="eqLegend" style="margin-top:4px">파랑 = 내 자본, 회색 = 같은 문제를 전부 25% 비중으로 샀을 때</div>
       <button class="pri" id="againBtn" style="width:100%;margin-top:12px">메뉴로</button>
     </div>
@@ -161,6 +171,8 @@ const qKey=q=>q.mk+q.code+q.date;
 const QMAP=new Map(Q.map(q=>[qKey(q),q]));
 let notes=store.get('bo_notes',[]);
 let eq=100,eqHist=[100],eqAll=100,eqAllHist=[100],trades4=[];
+let daily=false,dailyQs=[],dailyMarks=[],dailyR=0,costBak=false;
+let lossStreak4=0,lastBuyW4=0,lastBuyNet4=0,flags4=[],disc4=0;
 const mdd=h=>{let pk=h[0],m=0;h.forEach(v=>{pk=Math.max(pk,v);m=Math.min(m,v/pk-1)});return m*100};
 let tBuys=0,tSumR=0,tWins=0,tPass=0;
 let round=0,score=0,streak=0,right=0,cur=null,used=new Set(),timer=null,locked=false;
@@ -178,8 +190,9 @@ function baseStat(m,p){let n=0,w=0,s=0;(m=='ALL'?['KR','US']:[m]).forEach(k=>(p=
 function baseInfo(){const b=baseStat(mk,per);$('#baseInfo').innerHTML=b?`실전 기저율: 돌파 ${b.n.toLocaleString()}건 중 20일 +3% 초과는 <b>${b.win.toFixed(0)}%</b>, 평균 수익 <b>${fmt(b.avg)}</b> (손절 포함${useCost?', 비용 반영':''}). 모두 '실패'라고 찍어도 ${(100-b.win).toFixed(0)}% 맞습니다.`:''}
 desc();baseInfo();
 
-const pool=()=>review?notes.map(n=>QMAP.get(n.k)).filter(Boolean):Q.filter(q=>(mk=='ALL'||q.mk==mk)&&(per=='ALL'||q.per==per));
-function pickQ(){let p=pool().filter(q=>!used.has(q));
+const pool=()=>daily?dailyQs:review?notes.map(n=>QMAP.get(n.k)).filter(Boolean):Q.filter(q=>(mk=='ALL'||q.mk==mk)&&(per=='ALL'||q.per==per));
+function pickQ(){if(daily){const q=dailyQs[round-1];used.add(q);return q}
+  let p=pool().filter(q=>!used.has(q));
   if(mode==1&&ratio=='bal'&&!review){const w=Math.random()<.5,b=p.filter(q=>okOf(q)==w);if(b.length)p=b}
   const q=p[Math.floor(Math.random()*p.length)];used.add(q);return q}
 function pick4(){
@@ -240,12 +253,36 @@ function animate(fn,from,to,done){clearInterval(timer);let i=from;timer=setInter
 /* ---------- 흐름 ---------- */
 function startGame(rev){
   review=!!rev;if(review&&mode!=1&&mode!=3){mode=1;syncMode()}
-  total=totalSel;if(review)total=Math.min(total,pool().length);if(!total)return;
+  total=daily?dailyQs.length:totalSel;if(review)total=Math.min(total,pool().length);if(!total)return;
   used=new Set();round=0;score=0;streak=0;right=0;tBuys=tSumR=tWins=tPass=0;
-  eq=100;eqHist=[100];eqAll=100;eqAllHist=[100];trades4=[];
+  eq=100;eqHist=[100];eqAll=100;eqAllHist=[100];trades4=[];lossStreak4=0;lastBuyW4=0;lastBuyNet4=0;flags4=[];disc4=0;dailyMarks=[];dailyR=0;
   $('#menu').classList.add('hide');$('#end').classList.add('hide');$('#game').classList.remove('hide');next()}
-$('#startBtn').onclick=()=>startGame(false);
-$('#noteBtn').onclick=()=>startGame(true);
+$('#startBtn').onclick=()=>{daily=false;startGame(false)};
+$('#noteBtn').onclick=()=>{daily=false;startGame(true)};
+/* ---------- 오늘의 문제: 날짜를 시드로 모두에게 같은 5문제 ---------- */
+const fmtD=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const todayStr=()=>fmtD(new Date());
+function rng32(s){return()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function dailySet(date){
+  const r=rng32(+date.replace(/-/g,'')),sh=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+  return sh(sh(Q.filter(q=>q.mk=='KR')).slice(0,2).concat(sh(Q.filter(q=>q.mk=='US')).slice(0,3)));
+}
+let dailyStore=store.get('bo_daily',{});
+function dailyStreak(){let n=0;const d=new Date();if(!dailyStore[fmtD(d)])d.setDate(d.getDate()-1);while(dailyStore[fmtD(d)]){n++;d.setDate(d.getDate()-1)}return n}
+const shareText=(k,r)=>`📈 돌파 매매 시뮬레이터 ${k}\n${r.marks} ${r.R>=0?'+':''}${r.R.toFixed(1)}R\n🟩수익 🟥손실 ⬜패스 🟨놓친 성공\nhttps://jungkbugk.github.io/breakout-game/`;
+function copyText(text,btn,ta){
+  const ok=()=>{const o=btn.textContent;btn.textContent='복사됨 ✓';setTimeout(()=>btn.textContent=o,1500)};
+  const fb=()=>{try{const x=ta||document.createElement('textarea');if(!ta){x.value=text;document.body.appendChild(x)}x.select();document.execCommand('copy');if(!ta)x.remove();ok()}catch(e){}};
+  try{navigator.clipboard.writeText(text).then(ok,fb)}catch(e){fb()}
+}
+function renderDaily(){
+  const k=todayStr(),r=dailyStore[k],s=dailyStreak();
+  $('#dailyInfo').innerHTML=r?`오늘 완료 ${r.marks} · <b>${r.R>=0?'+':''}${r.R.toFixed(1)}R</b> · 연속 ${s}일 <span class="sub">(다시 풀어도 기록은 처음 결과가 남습니다)</span>`:`${k} · 모두에게 같은 5문제(국장 2 · 미장 3)를 ③ 매매 연습 방식으로 풉니다. 비용 없음.${s?' 연속 '+s+'일 🔥':''}`;
+  $('#dailyBtn').textContent=r?'다시 풀기':'오늘의 5문제 시작';$('#dailyShare').classList.toggle('hide',!r);
+}
+$('#dailyBtn').onclick=()=>{daily=true;costBak=useCost;useCost=false;mode=3;syncMode();dailyQs=dailySet(todayStr());startGame(false)};
+$('#dailyShare').onclick=()=>{const r=dailyStore[todayStr()];if(r)copyText(shareText(todayStr(),r),$('#dailyShare'))};
+$('#shareBtn').onclick=()=>copyText($('#shareTx').value,$('#shareBtn'),$('#shareTx'));
 $('#noteClr').onclick=()=>{if(confirm('오답 노트를 비울까요?')){notes=[];saveNotes()}};
 function saveNotes(){store.set('bo_notes',notes);renderNoteCard()}
 function noteMiss(q){const k=qKey(q),n=notes.find(x=>x.k==k);if(n)n.r=0;else{notes.push({k,r:0});if(notes.length>300)notes.shift()}saveNotes()}
@@ -253,8 +290,8 @@ function noteGood(q){const i=notes.findIndex(x=>x.k==qKey(q));if(i<0)return;if(+
 function renderNoteCard(){const n=notes.filter(x=>QMAP.has(x.k)).length;
   $('#noteInfo').textContent=n?`틀리거나 손실 본 ${n}건이 쌓여 있습니다. 같은 사례를 2번 연속 잘 처리하면 노트에서 빠집니다. (②는 4개 비교라 기록하지 않습니다)`:'아직 없습니다. ①·③·④에서 틀리거나 손실 본 사례(또는 놓친 성공)가 자동으로 쌓입니다.';
   $('#noteBtn').disabled=!n;$('#noteClr').disabled=!n}
-renderNoteCard();
-function setHud(){$('#prog').textContent=`${review?'📓 ':''}${round}/${total} 라운드`;const b=v=>`<b style="color:var(--tx)">${v}</b>`;
+renderNoteCard();renderDaily();
+function setHud(){$('#prog').textContent=`${daily?'📅 ':review?'📓 ':''}${round}/${total} 라운드`;const b=v=>`<b style="color:var(--tx)">${v}</b>`;
   $('#hud').innerHTML=mode==4?`자본 ${b(eq.toFixed(1))} · 낙폭 ${b(mdd(eqHist).toFixed(1)+'%')}`:`점수 ${b(score)} · 연속 ${b(streak)}`}
 function next(){
   if(round>=total)return finish();
@@ -343,6 +380,7 @@ function tradeEnd(price,why){
   if(buy){ret=price-100-cstOf(q);R=ret/8;pts=Math.round(R*10);tBuys++;tSumR+=R;g.buy++;g.sumR+=R;if(ret>0){tWins++;g.win++;streak++}else streak=0}
   else{tPass++;g.pass++;if(netRet(q)<=0)g.avoid++;else if(okOf(q))g.miss++}
   (buy?ret<=0:okOf(q))?noteMiss(q):noteGood(q);
+  if(daily){dailyMarks.push(buy?(ret>0?'🟩':'🟥'):(okOf(q)?'🟨':'⬜'));if(buy)dailyR+=R}
   score+=pts;store.set('bo_stats',st);setHud();$('#ans3').classList.add('hide');
   const exit=buy?[PRE+T.k-1,price]:null;
   animate(i=>drawTrade(i,exit),from,PRE+POST,()=>{
@@ -359,14 +397,28 @@ function tradeEnd(price,why){
 }
 /* ---------- ④ 연속 매매 ---------- */
 const WS=[0.1,0.25,0.5,1];
+function moodMsg(){
+  const dd=mdd(eqHist);
+  if(lossStreak4>=2)return `😤 ${lossStreak4}연패 중입니다. 만회하려고 비중을 키우고 싶어지는 순간이에요.`;
+  if(lastBuyNet4>=15)return `😎 직전 거래 ${fmt(lastBuyNet4)}. 잘 풀릴 때 과신해서 비중을 키우기 쉬운 순간이에요.`;
+  if(dd<=-8)return `😰 고점 대비 ${dd.toFixed(1)}%. 이걸 메우려면 +${((1/(1+dd/100)-1)*100).toFixed(1)}%가 필요합니다.`;
+  return '';
+}
 function tradeBtns4(){
-  $('#tInfo').innerHTML=`자본 <b>${eq.toFixed(1)}</b> · 청산 ${XN[exitRule]} + 손절 -8% 자동 · 최대 손실 = 비중 × 8%`;
+  const m=moodMsg();
+  $('#tInfo').innerHTML=`자본 <b>${eq.toFixed(1)}</b> · 청산 ${XN[exitRule]} + 손절 -8% 자동 · 최대 손실 = 비중 × 8%`+(m?`<div class="warn" style="margin-top:4px">${m}</div>`:'');
   $('#tBtns').innerHTML='<button class="grow" data-w="0">패스</button>'+WS.map(w=>`<button class="up grow" data-w="${w}">${w*100}%</button>`).join('');
   document.querySelectorAll('#tBtns button').forEach(b=>b.onclick=()=>trade4(+b.dataset.w));
 }
 function trade4(w){
   if(locked)return;locked=true;
   const q=cur,s=simRule(q,exitRule),net=s.p-cstOf(q)*s.un,before=eq;
+  const tempt=lossStreak4>=2||lastBuyNet4>=15;let flag=null,good=null;
+  if(w>0&&w>lastBuyW4&&lossStreak4>=2)flag=`복수 매매: ${lossStreak4}연패 뒤 비중을 ${lastBuyW4*100}%→${w*100}%로 키웠습니다.`;
+  else if(w>0&&w>lastBuyW4&&lastBuyNet4>=15)flag=`과신 매매: 큰 수익(${fmt(lastBuyNet4)}) 뒤 비중을 ${lastBuyW4*100}%→${w*100}%로 키웠습니다.`;
+  else if(tempt)good=w?'흔들리는 순간에 비중을 키우지 않았습니다.':'흔들리는 순간에 쉬어 갔습니다.';
+  if(flag)flags4.push({t:flag,pnl:w*net,k:lossStreak4>=2?'r':'o'});if(good)disc4++;
+  if(w>0){lossStreak4=net>0?0:lossStreak4+1;lastBuyW4=w;lastBuyNet4=net}
   eq*=1+w*net/100;eqHist.push(eq);eqAll*=1+.25*net/100;eqAllHist.push(eqAll);trades4.push({w,net});
   if(w>0){net>0?(streak++,noteGood(q)):(streak=0,noteMiss(q))}else okOf(q)?noteMiss(q):noteGood(q);
   st.g4.n=(st.g4.n||0)+1;store.set('bo_stats',st);setHud();$('#ans3').classList.add('hide');
@@ -376,7 +428,7 @@ function trade4(w){
     const head=w?`<div class="big ${net>0?'good':'bad'}">${fmt(net)} × 비중 ${w*100}% = 자본 ${fmt(w*net)}</div>`
       :`<div class="big warn">패스</div><div class="sub">샀다면 ${fmt(net)} (${net<=0?'손실을 피했습니다':okOf(q)?'성공한 돌파를 놓쳤습니다':'큰 차이는 없었습니다'})</div>`;
     const r=$('#result');r.classList.remove('hide');
-    r.innerHTML=`${head}<div class="sub" style="margin-top:4px">자본 ${before.toFixed(1)} → <b style="color:var(--tx)">${eq.toFixed(1)}</b> · ${why}</div><div style="margin-top:6px">${info(q)}</div>`+featTable(q);
+    r.innerHTML=`${head}<div class="sub" style="margin-top:4px">자본 ${before.toFixed(1)} → <b style="color:var(--tx)">${eq.toFixed(1)}</b> · ${why}</div>${flag?`<div class="warn" style="margin-top:6px">⚠️ ${flag} 이 거래 ${fmt(w*net)}</div>`:''}${good?`<div class="good" style="margin-top:6px">✅ ${good}</div>`:''}<div style="margin-top:6px">${info(q)}</div>`+featTable(q);
     $('#nextBtn').classList.remove('hide');$('#nextBtn').textContent=round>=total?'결과 보기':'다음';$('#nextBtn').scrollIntoView({behavior:'smooth',block:'end'});
   });
 }
@@ -428,18 +480,26 @@ $('#pick2').onclick=()=>{
 $('#nextBtn').onclick=next;
 function finish(){
   $('#game').classList.add('hide');$('#end').classList.remove('hide');
-  $('#eqc').classList.toggle('hide',mode!=4);$('#eqLegend').classList.toggle('hide',mode!=4);
+  $('#eqc').classList.toggle('hide',mode!=4);$('#eqLegend').classList.toggle('hide',mode!=4);$('#shareBox').classList.add('hide');
+  if(daily){
+    const k=todayStr(),Rr=Math.round(dailyR*10)/10,fresh=!dailyStore[k];
+    if(fresh){dailyStore[k]={marks:dailyMarks.join(''),R:Rr};store.set('bo_daily',dailyStore)}
+    const rec=dailyStore[k];
+    $('#endScore').textContent=`오늘의 문제 ${Rr>=0?'+':''}${Rr.toFixed(1)}R · ${score}점`;
+    $('#endDetail').innerHTML=`${dailyMarks.join('')}<br>🟩수익 🟥손실 ⬜패스 🟨놓친 성공<br>연속 ${dailyStreak()}일${fresh?'':'<br>이번 결과는 기록에 반영되지 않았습니다 (처음 결과 유지)'}`;
+    $('#shareTx').value=shareText(k,rec);$('#shareBox').classList.remove('hide');return;
+  }
   if(mode==4){
     const tr=trades4.filter(x=>x.w>0),wn=tr.filter(x=>x.net>0),ls=tr.filter(x=>x.net<=0),av=a=>a.length?a.reduce((s,x)=>s+x.net,0)/a.length:0;
     $('#endScore').textContent=`자본 ${eq.toFixed(1)} (${fmt(eq-100)})`;
-    $('#endDetail').innerHTML=`매수 ${tr.length}회 (이익 ${wn.length} · 손실 ${ls.length}) · 패스 ${total-tr.length}회<br>평균 이익 ${fmt(av(wn))} / 평균 손실 ${fmt(av(ls))} · 최대 낙폭 ${mdd(eqHist).toFixed(1)}%<br>같은 문제를 전부 25%로 샀다면 자본 ${eqAll.toFixed(1)}`;
+    $('#endDetail').innerHTML=`매수 ${tr.length}회 (이익 ${wn.length} · 손실 ${ls.length}) · 패스 ${total-tr.length}회<br>평균 이익 ${fmt(av(wn))} / 평균 손실 ${fmt(av(ls))} · 최대 낙폭 ${mdd(eqHist).toFixed(1)}%<br>같은 문제를 전부 25%로 샀다면 자본 ${eqAll.toFixed(1)}<br><b style="color:var(--tx)">행동 점검</b> · 복수 매매 ${flags4.filter(x=>x.k=='r').length}회 · 과신 매매 ${flags4.filter(x=>x.k=='o').length}회${flags4.length?` (해당 거래 자본 영향 합계 ${fmt(flags4.reduce((a,x)=>a+x.pnl,0))})`:''} · 절제 ${disc4}회`;
     const g=st.g4;g.runs++;g.sum+=eq-100;g.best=g.best==null?eq-100:Math.max(g.best,eq-100);store.set('bo_stats',st);
     drawEq();return;
   }
   $('#endScore').textContent=score+'점';
   $('#endDetail').textContent=mode==3?`매수 ${tBuys}회(수익 ${tWins}회) · 평균 ${tBuys?(tSumR/tBuys).toFixed(2):'0'}R · 패스 ${tPass}회`:`${total}라운드 중 ${right}개 정답 (${Math.round(right/total*100)}%)`;
 }
-$('#againBtn').onclick=()=>{$('#end').classList.add('hide');$('#menu').classList.remove('hide');review=false;renderNoteCard();baseInfo()};
+$('#againBtn').onclick=()=>{$('#end').classList.add('hide');$('#menu').classList.remove('hide');review=false;if(daily){useCost=costBak;daily=false}renderNoteCard();renderDaily();baseInfo()};
 
 /* ---------- 기록 ---------- */
 function statsExtra(){
