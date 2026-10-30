@@ -24,6 +24,7 @@ PRE = 130       # 돌파일 이전 표시 봉 수
 POST = 40       # 결과 공개/매매 연습용 이후 봉 수
 HOLD = 20       # 수익률 판정 보유일
 STOP = -0.08    # 손절
+STOPS = [5, 8, 12]   # 게임에서 고를 수 있는 손절폭(%) — 통계는 각각 따로 계산
 WIN = 0.03      # 성공 기준(20일 후 수익률)
 PER_GROUP = 50  # 시장 x 패턴 x 기간별 문제 수
 MIN_GAP = 25    # 같은 종목 사례 간 최소 간격
@@ -117,11 +118,11 @@ def find_events(df, min_value):
     return ev
 
 
-def outcome(df, i, E, P):
+def outcome(df, i, E, P, st=STOP):
     """피벗 체결가 E 진입, 손절 -8%(갭하락 시 시가 청산), 진입일 포함 20거래일 보유 후 종가 청산.
     진입일: 시가<피벗인 상승일은 저가가 체결 전에 나온 것으로 보아 손절을 적용하지 않는다."""
     o, l, c = (df[k].to_numpy(float) for k in ["Open", "Low", "Close"])
-    stop = E * (1 + STOP)
+    stop = E * (1 + st)
     ret, stopped = None, False
     for k in range(0, HOLD + 1):
         j = i + k
@@ -129,7 +130,7 @@ def outcome(df, i, E, P):
             ret, stopped = o[j] / E - 1, True
             break
         if l[j] <= stop and (k > 0 or o[j] >= P or c[j] < o[j]):
-            ret, stopped = STOP, True
+            ret, stopped = st, True
             break
     if ret is None:
         ret = c[i + HOLD] / E - 1
@@ -201,10 +202,11 @@ def ma_series(c, kind, n):
     return out
 
 
-def sim_rule(o, h, l, c, pv, rule):
+def sim_rule(o, h, l, c, pv, rule, S=8):
     """진입가=100 기준 배열로 청산 규칙을 시뮬레이션 -> (손익%, 청산 봉 인덱스, 투입 단위 수).
     template.html의 simRule과 동일해야 한다. 손절 -8%는 모든 규칙에 포함."""
     e, L = PRE, len(c)
+    lv = 100 - S
     estop = o[e] >= pv - 1e-6 or c[e] < o[e]
     ma = None
     if rule.startswith("ma"):
@@ -220,10 +222,10 @@ def sim_rule(o, h, l, c, pv, rule):
 
     for j in range(e, L):
         un = 2 if add is not None else 1
-        if j > e and o[j] <= 92:
+        if j > e and o[j] <= lv:
             return pn(o[j]), j, un
-        if l[j] <= 92 and (j > e or estop):
-            return pn(92.0), j, un
+        if l[j] <= lv and (j > e or estop):
+            return pn(float(lv)), j, un
         if rule == "h20" and j == e + 20:
             return pn(c[j]), j, un
         if rule == "pyr" and add is None and c[j] >= 105:
@@ -257,39 +259,8 @@ def feats_of(prev, code, vx, nh, r3, rs, sp, sg):
     return f
 
 
-def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
-    frames = {k: clean(v) for k, v in frames.items()}
-    sg = state.reindex(rs.index, method="ffill")
-    cost = COST[tag] * 100
-    groups, base = {}, {}
-    fs = {k: [[0, 0, 0.0, 0, 0.0] for _ in bs] for k, _, bs in FEATS}
-    rl = {r: [] for r in RULES}
-    for code, df in frames.items():
-        for i, pat, vx, nh, r3, P, E in find_events(df, min_value):
-            ret, mx, mn, stopped = outcome(df, i, E, P)
-            d = df.index[i]
-            per = "pre" if d < SPLIT else "post"
-            f = feats_of(df.index[i - 1], code, vx, nh, r3, rs, sp, sg)
-            groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, f, P, E))
-            b = base.setdefault(per, {}).setdefault(pat, [0, 0, 0.0, 0, 0.0])
-            b[0] += 1
-            b[1] += int(ret > WIN)
-            b[2] += ret
-            b[3] += int(ret - COST[tag] > WIN)
-            b[4] += ret - COST[tag]
-            for (k, _, _), bi in zip(FEATS, f["b"]):
-                if bi >= 0:
-                    s = fs[k][bi]
-                    s[0] += 1
-                    s[1] += int(ret > WIN)
-                    s[2] += ret
-                    s[3] += int(ret - COST[tag] > WIN)
-                    s[4] += ret - COST[tag]
-            o_, h_, l_, c_ = scaled_arrays(df, i, E)
-            pv = P * 100.0 / E
-            for r in RULES:
-                pnl, jj, un = sim_rule(o_, h_, l_, c_, pv, r)
-                rl[r].append((pnl, un, jj - PRE))
+def finalize(base, fs, rl, cost):
+    """누적 통계를 JSON용으로 정리."""
     for per in base:
         for pat, b in base[per].items():
             n = b[0]
@@ -315,6 +286,46 @@ def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
                     round(float(w.mean()), 2) if len(w) else 0, round(float(ls.mean()), 2) if len(ls) else 0,
                     round(float(hold.mean()), 1), round(float((net > 0).mean() * 100), 1), round(float(net.mean()), 2),
                     round(float(un.mean()), 2)]
+    return base, fstat, rstat
+
+
+def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
+    frames = {k: clean(v) for k, v in frames.items()}
+    sg = state.reindex(rs.index, method="ffill")
+    cost = COST[tag] * 100
+    groups = {}
+    base = {S: {} for S in STOPS}
+    fs = {S: {k: [[0, 0, 0.0, 0, 0.0] for _ in bs] for k, _, bs in FEATS} for S in STOPS}
+    rl = {S: {r: [] for r in RULES} for S in STOPS}
+    for code, df in frames.items():
+        for i, pat, vx, nh, r3, P, E in find_events(df, min_value):
+            d = df.index[i]
+            per = "pre" if d < SPLIT else "post"
+            f = feats_of(df.index[i - 1], code, vx, nh, r3, rs, sp, sg)
+            o_, h_, l_, c_ = scaled_arrays(df, i, E)
+            pv = P * 100.0 / E
+            for S in STOPS:
+                ret, mx, mn, stopped = outcome(df, i, E, P, -S / 100)
+                if S == 8:
+                    groups.setdefault((pat, per), []).append((code, df, i, ret, mx, mn, stopped, f, P, E))
+                b = base[S].setdefault(per, {}).setdefault(pat, [0, 0, 0.0, 0, 0.0])
+                b[0] += 1
+                b[1] += int(ret > WIN)
+                b[2] += ret
+                b[3] += int(ret - COST[tag] > WIN)
+                b[4] += ret - COST[tag]
+                for (k, _, _), bi in zip(FEATS, f["b"]):
+                    if bi >= 0:
+                        s = fs[S][k][bi]
+                        s[0] += 1
+                        s[1] += int(ret > WIN)
+                        s[2] += ret
+                        s[3] += int(ret - COST[tag] > WIN)
+                        s[4] += ret - COST[tag]
+                for r in RULES:
+                    pnl, jj, un = sim_rule(o_, h_, l_, c_, pv, r, S)
+                    rl[S][r].append((pnl, un, jj - PRE))
+    stats = {S: finalize(base[S], fs[S], rl[S], cost) for S in STOPS}
     out = []
     for (pat, per), lst in sorted(groups.items()):
         rng.shuffle(lst)
@@ -329,7 +340,7 @@ def build_market(tag, frames, names, idx_frames, min_value, rng, state, rs, sp):
                 "date": date.strftime("%Y-%m-%d"), "f": f,
             })
             out.append(q)
-    return out, base, fstat, rstat
+    return out, stats
 
 
 def main():
@@ -340,7 +351,7 @@ def main():
     kr_frames = {k: clean(v) for k, v in kr["data"].items()}
     kr_sec = {c: s for c, s in wics.items() if s and s != "없음" and c in kr_frames}
     rs, sp = rank_panels(kr_frames, kr_sec)
-    kr_out, kr_base, kr_fs, kr_rs = build_market("KR", kr_frames, kr["names"], {"코스피": ks, "코스닥": kq}, 2e9, rng,
+    kr_out, kr_st = build_market("KR", kr_frames, kr["names"], {"코스피": ks, "코스닥": kq}, 2e9, rng,
                                    idx_state(ks["Close"], ks["Volume"]), rs, sp)
 
     us = load("us_ohlcv_1500.pkl")
@@ -350,15 +361,18 @@ def main():
                  for t in us["Close"].columns}
     us_sec = {t: s for t, s in load("sectors.pkl").items() if isinstance(s, str) and s and t in us_frames}
     rs, sp = rank_panels(us_frames, us_sec)
-    us_out, us_base, us_fs, us_rs = build_market("US", us_frames, {}, idx, 1e7, rng,
+    us_out, us_st = build_market("US", us_frames, {}, idx, 1e7, rng,
                                    idx_state(etf[("Close", "SPY")].dropna(), etf[("Volume", "SPY")].dropna()), rs, sp)
 
     qs = kr_out + us_out
     rng.shuffle(qs)
     with open(os.path.join(HERE, "questions.json"), "w", encoding="utf-8") as f:
         json.dump({"patterns": PATTERNS, "pre": PRE, "post": POST, "hold": HOLD,
-                   "base": {"KR": kr_base, "US": us_base}, "cost": COST,
-                   "fs": {"KR": kr_fs, "US": us_fs}, "rules": {"KR": kr_rs, "US": us_rs},
+                   "base": {"KR": kr_st[8][0], "US": us_st[8][0]}, "cost": COST,
+                   "fs": {"KR": kr_st[8][1], "US": us_st[8][1]}, "rules": {"KR": kr_st[8][2], "US": us_st[8][2]},
+                   "alt": {str(S): {"base": {"KR": kr_st[S][0], "US": us_st[S][0]},
+                                    "fs": {"KR": kr_st[S][1], "US": us_st[S][1]},
+                                    "rules": {"KR": kr_st[S][2], "US": us_st[S][2]}} for S in STOPS if S != 8},
                    "featKeys": [k for k, _, _ in FEATS], "q": qs},
                   f, ensure_ascii=False, separators=(",", ":"))
     print("문제", len(qs), "KR", len(kr_out), "US", len(us_out),
